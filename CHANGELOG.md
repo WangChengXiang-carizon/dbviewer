@@ -6,7 +6,15 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
-- Initial release
+- 初始开发与修复（见下面版本历史）
+
+## [0.0.3] - 2026-03-04
+
+- 修复并增强 SQL 查询面板：在 webview 中处理 `execute` 消息并返回结果；当在表级打开时注入默认 SQL（`SELECT * FROM \\`DB\\`.\\`TABLE\\` LIMIT 100;`），在数据库级打开时默认展示 `SHOW TABLES;`；对无结果集的语句返回受影响行信息。
+- 修复表视图后端：使用 `information_schema.COLUMNS` 返回列信息并按前端期望别名（Field/Type/Null/Key/Default/Extra/Comment）；改用 `.query` 执行以避免 prepared-statement 参数错误；返回分页数据与外键引用以支持结构/数据/ER 页面渲染。
+- 修复连接配置面板：实现 `save`/`test`/`delete` 消息处理；`test` 使用临时连接并立即断开，`delete` 后自动关闭编辑面板并刷新侧栏（加入短延迟以缓解删除首项的刷新竞态）。
+- 修复侧栏连接图标显示问题：使用彩色 SVG 图标并为 `TreeItem` 设置稳定 `id`，保证局部刷新与颜色显示一致。
+- 其他：若干编译与 lint 修复，改进错误提示与日志。
 
 ## [0.0.2] - 2026-03-03
 

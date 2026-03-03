@@ -391,7 +391,9 @@ export function activate(context: vscode.ExtensionContext) {
 		await saveConfigs(context, configs);
 		await deletePwd(context, id);
 		await provider.disconnect(id);
-		provider.refresh();
+        provider.refresh();
+        // 防止删除第一个连接时出现 UI 竞态，稍后再触发一次完整刷新
+        setTimeout(() => { try { provider.refresh(); outputChannel?.appendLine('[DBG] delayed refresh after deleteConnCmd'); } catch {} }, 120);
 	});
 
 	// ── 刷新 ──────────────────────────────────────────────────

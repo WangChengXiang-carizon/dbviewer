@@ -2,7 +2,7 @@
   "name": "dbviewer",
   "displayName": "MySQL Simple Viewer",
   "description": "MySQL database viewer for VS Code",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "cxwang",
   "engines": {
     "vscode": "^1.80.0"
