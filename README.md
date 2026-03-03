@@ -1,77 +1,22 @@
-# dbviewer README
+# dbviewer
 
-This is the README for your extension "dbviewer". After writing up a brief description, we recommend including the following sections.
+一个在 VS Code 中使用的 MySQL 数据库可视化插件，支持多标签浏览、结构/数据/ER 图查看、SQL 查询与结果格式化。
 
-## Features
+## 主要功能
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+- 配置并管理 MySQL 连接，密码安全存储
+- 浏览所有数据库和数据表
+- 查看表结构、数据、ER 图
+- SQL 查询面板，支持结果单元格弹窗与 JSON 格式化
+- 分页与每页条数选择
+- 数据库/表节点右键快速查询
 
-For example if there is an image subfolder under your extension project workspace:
+## 安装与使用
 
-\!\[feature X\]\(images/feature-x.png\)
+1. VS Code 扩展市场搜索 “dbviewer” 并安装，或下载 .vsix 文件后通过“扩展：从 VSIX 安装...”导入
+2. 侧边栏点击 dbviewer 图标，添加并配置 MySQL 连接
+3. 浏览数据库、表结构、数据、ER 图，或使用 SQL 查询面板
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+## License
 
-## Requirements
-
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
-
-## Extension Settings
-
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
-
-For example:
-
-This extension contributes the following settings:
-
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
-
-## Known Issues
-
-Calling out known issues can help limit users opening duplicate issues against your extension.
-
-## Release Notes
-
-Users appreciate release notes as you update your extension.
-
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
-
-
-当前项目dbviewer是一个模仿dbviewer软件的vscode plugin,我们逐步实现以下功能：
-1. 可配置mysql连接，测试连接
-2. 可显示mysql数据库中的所有数据库
-3. 可显示用户选择的数据库的数据表
+MIT License，详见 LICENSE 文件。

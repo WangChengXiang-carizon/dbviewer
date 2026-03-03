@@ -1,10 +1,11 @@
 {
   "name": "dbviewer",
-  "displayName": "DB Viewer",
+  "displayName": "MySQL Simple Viewer",
   "description": "MySQL database viewer for VS Code",
   "version": "0.0.1",
+  "publisher": "cxwang",
   "engines": {
-    "vscode": "^1.109.0"
+    "vscode": "^1.80.0"
   },
   "categories": [
     "Other"
@@ -106,12 +107,13 @@
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "package": "vsce package --allow-missing-repository --allow-star-activation"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "^22.19.13",
-    "@types/vscode": "^1.109.0",
+    "@types/vscode": "^1.80.0",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
     "eslint": "^9.39.2",
