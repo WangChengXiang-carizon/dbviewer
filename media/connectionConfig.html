@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>{{TITLE}}</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  padding: 28px 36px;
+  max-width: 500px;
+}
+h2 { margin-bottom: 22px; font-size: 1.1em; font-weight: 600; }
+.field { margin-bottom: 14px; }
+label { display: block; margin-bottom: 4px; font-size: 0.85em; opacity: 0.75; }
+input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--vscode-input-border, #888);
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border-radius: 3px;
+  font-size: 1em;
+  outline: none;
+}
+input:focus { border-color: var(--vscode-focusBorder); }
+.row { display: flex; gap: 10px; }
+.row .field { flex: 1; }
+.actions { display: flex; gap: 8px; margin-top: 20px; flex-wrap: wrap; align-items: center; }
+button {
+  padding: 6px 16px;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.92em;
+  font-family: inherit;
+}
+.btn-primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.btn-primary:hover { background: var(--vscode-button-hoverBackground); }
+.btn-secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+.btn-secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.btn-danger { background: transparent; color: var(--vscode-errorForeground, #f48771); border: 1px solid currentColor; margin-left: auto; }
+.btn-danger:hover { opacity: 0.8; }
+#status {
+  margin-top: 14px; padding: 8px 12px; border-radius: 3px;
+  font-size: 0.88em; display: none;
+}
+#status.connecting { background: var(--vscode-editorInfo-background, #1e3a5f); color: #9cdcfe; }
+#status.ok   { background: #1a3a1a; color: #89d185; }
+#status.error { background: var(--vscode-inputValidation-errorBackground, #5a1d1d); color: #f48771; }
+</style>
+</head>
+<body>
+<h2>{{HEADING}}</h2>
+<input type="hidden" id="conn-id"/>
+<div class="field">
+  <label for="name">连接名称</label>
+  <input id="name" type="text" placeholder="My MySQL"/>
+</div>
+<div class="row">
+  <div class="field">
+    <label for="host">主机地址</label>
+    <input id="host" type="text" placeholder="localhost"/>
+  </div>
+  <div class="field" style="max-width:110px">
+    <label for="port">端口</label>
+    <input id="port" type="number" placeholder="3306"/>
+  </div>
+</div>
+<div class="field">
+  <label for="user">用户名</label>
+  <input id="user" type="text" placeholder="root"/>
+</div>
+<div class="field">
+  <label for="password">密码</label>
+  <input id="password" type="password" placeholder="输入密码"/>
+</div>
+<div class="field">
+  <label for="database">默认数据库 <span style="opacity:0.5">(可选)</span></label>
+  <input id="database" type="text" placeholder="留空则显示所有数据库"/>
+</div>
+<div class="actions">
+  <button class="btn-primary" onclick="save()">保存并连接</button>
+  <button class="btn-secondary" onclick="test()">测试连接</button>
+  {{DELETE_BTN}}
+</div>
+<div id="status"></div>
+
+<script>
+const vscode = acquireVsCodeApi();
+vscode.postMessage({ command: 'ready' });
+
+window.addEventListener('message', function(e) {
+  const msg = e.data;
+  if (msg.type === 'init') {
+    const cfg = msg.cfg;
+    if (cfg) {
+      document.getElementById('conn-id').value   = cfg.id;
+      document.getElementById('name').value      = cfg.name;
+      document.getElementById('host').value      = cfg.host;
+      document.getElementById('port').value      = cfg.port;
+      document.getElementById('user').value      = cfg.user;
+      document.getElementById('database').value  = cfg.database || '';
+      document.getElementById('password').value  = msg.pwd || '';
+    } else {
+      document.getElementById('host').value = 'localhost';
+      document.getElementById('port').value = '3306';
+      document.getElementById('user').value = 'root';
+    }
+  } else if (msg.type === 'connecting' || msg.type === 'ok' || msg.type === 'error') {
+    const s = document.getElementById('status');
+    s.className = msg.type;
+    s.textContent = msg.message;
+    s.style.display = 'block';
+  }
+});
+
+function collect() {
+  return {
+    id:       document.getElementById('conn-id').value || undefined,
+    name:     document.getElementById('name').value.trim(),
+    host:     document.getElementById('host').value.trim(),
+    port:     document.getElementById('port').value.trim(),
+    user:     document.getElementById('user').value.trim(),
+    database: document.getElementById('database').value.trim(),
+    password: document.getElementById('password').value
+  };
+}
+function save() { vscode.postMessage({ command: 'save', ...collect() }); }
+function test() { vscode.postMessage({ command: 'test', ...collect() }); }
+function del()  { vscode.postMessage({ command: 'delete', id: document.getElementById('conn-id').value }); }
+
+document.addEventListener('keydown', function(ev) {
+  if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) save();
+});
+</script>
+</body>
+</html>

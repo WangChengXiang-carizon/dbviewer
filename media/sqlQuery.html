@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>SQL 查询 - {{TITLE}}</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  display: flex;
+  flex-direction: column;
+}
+#header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border, #444);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#title { font-weight: 600; }
+#db-badge {
+  opacity: 0.8;
+  font-size: 0.85em;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+}
+#editor {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border, #444);
+}
+#sql {
+  width: 100%;
+  height: 150px;
+  resize: vertical;
+  border: 1px solid var(--vscode-input-border, #666);
+  border-radius: 4px;
+  padding: 10px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+#actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+button {
+  border: none;
+  border-radius: 3px;
+  padding: 5px 14px;
+  cursor: pointer;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+button:hover { background: var(--vscode-button-hoverBackground); }
+#hint { opacity: 0.65; font-size: 0.85em; }
+#status {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border, #444);
+  display: none;
+}
+#status.ok { color: #89d185; display: block; }
+#status.error { color: #f48771; display: block; }
+#result { flex: 1; overflow: auto; }
+#empty { padding: 30px; opacity: 0.55; }
+table { border-collapse: collapse; width: 100%; min-width: max-content; font-size: 0.88em; }
+th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--vscode-editor-background);
+  border-bottom: 2px solid var(--vscode-panel-border, #444);
+  text-align: left;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+td {
+  border-bottom: 1px solid var(--vscode-panel-border, #333);
+  padding: 5px 10px;
+  white-space: nowrap;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.null { opacity: 0.45; font-style: italic; }
+/* Cell detail modal */
+#modal-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 100;
+}
+#modal-overlay.open { display: flex; align-items: center; justify-content: center; }
+#modal-box {
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-panel-border, #555);
+  border-radius: 6px;
+  width: min(760px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+}
+#modal-header {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--vscode-panel-border, #444);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#modal-field { font-weight: 600; flex: 1; }
+#modal-type {
+  font-size: 0.75em;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  opacity: 0.85;
+}
+#modal-close {
+  background: none;
+  color: var(--vscode-foreground);
+  opacity: 0.7;
+  padding: 2px 8px;
+}
+#modal-close:hover { opacity: 1; }
+#modal-body {
+  overflow: auto;
+  padding: 14px 16px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.9em;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.jk   { color: #9cdcfe; }
+.js   { color: #ce9178; }
+.jnum { color: #b5cea8; }
+.jb   { color: #569cd6; }
+.jn   { color: #808080; font-style: italic; }
+</style>
+</head>
+<body>
+<div id="header">
+  <div id="title">SQL 查询</div>
+  <div id="db-badge">{{DB}}</div>
+</div>
+<div id="editor">
+  <textarea id="sql">{{DEFAULT_SQL}}</textarea>
+  <div id="actions">
+    <button onclick="runQuery()">执行 (Ctrl/Cmd+Enter)</button>
+    <span id="hint">仅执行单条 SQL 语句</span>
+  </div>
+</div>
+<div id="status"></div>
+<div id="result"><div id="empty">请输入 SQL 并执行</div></div>
+
+<div id="modal-overlay" onclick="closeModal(event)">
+  <div id="modal-box">
+    <div id="modal-header">
+      <span id="modal-field"></span>
+      <span id="modal-type"></span>
+      <button id="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+const vscode = acquireVsCodeApi();
+let resultRows = [];
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function setStatus(type, text) {
+  const el = document.getElementById('status');
+  el.className = type;
+  el.textContent = text;
+}
+
+function runQuery() {
+  const sql = document.getElementById('sql').value.trim();
+  if (!sql) {
+    setStatus('error', '请输入 SQL 语句');
+    return;
+  }
+  setStatus('ok', '执行中...');
+  vscode.postMessage({ command: 'execute', sql });
+}
+
+window.addEventListener('message', function(e) {
+  const msg = e.data;
+  if (msg.type === 'error') {
+    setStatus('error', msg.message || '执行失败');
+    return;
+  }
+  if (msg.type !== 'result') { return; }
+
+  if (msg.mode === 'ok') {
+    setStatus('ok', msg.message || '执行成功');
+    document.getElementById('result').innerHTML = '<div id="empty">此语句无结果集返回</div>';
+    return;
+  }
+
+  const columns = msg.columns || [];
+  const rows = msg.rows || [];
+  resultRows = rows;
+  setStatus('ok', '执行成功，返回 ' + rows.length + ' 行');
+
+  if (!columns.length) {
+    document.getElementById('result').innerHTML = '<div id="empty">无可展示字段</div>';
+    return;
+  }
+
+  let html = '<table><thead><tr>' + columns.map(function(c) {
+    return '<th>' + esc(c) + '</th>';
+  }).join('') + '</tr></thead><tbody>';
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] || {};
+    html += '<tr>' + columns.map(function(c) {
+      const v = row[c];
+      const attr = ' data-ri="' + i + '" data-col="' + esc(c) + '" onclick="openCell(this)"';
+      if (v === null || v === undefined) {
+        return '<td class="null"' + attr + '>NULL</td>';
+      }
+      const text = (typeof v === 'object') ? JSON.stringify(v) : String(v);
+      return '<td title="' + esc(text) + '"' + attr + '>' + esc(text) + '</td>';
+    }).join('') + '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('result').innerHTML = html;
+});
+
+function openCell(td) {
+  const ri = parseInt(td.dataset.ri, 10);
+  const col = td.dataset.col;
+  const row = resultRows[ri] || {};
+  const raw = row[col];
+
+  const fieldEl = document.getElementById('modal-field');
+  const typeEl = document.getElementById('modal-type');
+  const bodyEl = document.getElementById('modal-body');
+
+  fieldEl.textContent = col || '';
+  let parsed = null;
+  let isJson = false;
+
+  if (raw !== null && raw !== undefined) {
+    if (typeof raw === 'object') {
+      parsed = raw;
+      isJson = true;
+    } else if (typeof raw === 'string') {
+      try {
+        parsed = JSON.parse(raw);
+        isJson = parsed !== null && typeof parsed === 'object';
+      } catch (_) {}
+    }
+  }
+
+  if (raw === null || raw === undefined) {
+    typeEl.textContent = 'NULL';
+    bodyEl.innerHTML = '<span class="jn">NULL</span>';
+  } else if (isJson) {
+    typeEl.textContent = Array.isArray(parsed) ? 'JSON Array' : 'JSON Object';
+    bodyEl.innerHTML = jsonHL(parsed, 0);
+  } else {
+    const txt = String(raw);
+    typeEl.textContent = 'Text';
+    bodyEl.textContent = txt;
+  }
+
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function closeModal(e) {
+  if (e && e instanceof MouseEvent) {
+    const target = e.target;
+    if (target !== document.getElementById('modal-overlay') && target !== document.getElementById('modal-close')) {
+      return;
+    }
+  }
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+
+function jsonHL(val, depth) {
+  const pad  = '  '.repeat(depth);
+  const pad1 = '  '.repeat(depth + 1);
+  if (val === null) return '<span class="jn">null</span>';
+  if (typeof val === 'boolean') return '<span class="jb">' + val + '</span>';
+  if (typeof val === 'number') return '<span class="jnum">' + val + '</span>';
+  if (typeof val === 'string') return '<span class="js">"' + esc(val) + '"</span>';
+  if (Array.isArray(val)) {
+    if (!val.length) return '[]';
+    return '[\n' + val.map(function(v) {
+      return pad1 + jsonHL(v, depth + 1);
+    }).join(',\n') + '\n' + pad + ']';
+  }
+  if (typeof val === 'object') {
+    const keys = Object.keys(val);
+    if (!keys.length) return '{}';
+    return '{\n' + keys.map(function(k) {
+      return pad1 + '<span class="jk">"' + esc(k) + '"</span>: ' + jsonHL(val[k], depth + 1);
+    }).join(',\n') + '\n' + pad + '}';
+  }
+  return esc(String(val));
+}
+
+document.addEventListener('keydown', function(ev) {
+  if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) runQuery();
+  if (ev.key === 'Escape') closeModal();
+});
+</script>
+</body>
+</html>

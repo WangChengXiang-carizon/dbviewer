@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>{{TBL}}</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  display: flex;
+  flex-direction: column;
+}
+/* ── Header ── */
+#header {
+  padding: 10px 16px 0;
+  border-bottom: 1px solid var(--vscode-panel-border, #444);
+  flex-shrink: 0;
+}
+#table-title {
+  font-size: 0.82em;
+  opacity: 0.6;
+  margin-bottom: 8px;
+}
+#table-title span { font-weight: 600; opacity: 1; color: var(--vscode-foreground); }
+/* ── Tabs ── */
+#tabs { display: flex; gap: 0; }
+.tab {
+  padding: 6px 18px;
+  cursor: pointer;
+  font-size: 0.9em;
+  border-bottom: 2px solid transparent;
+  opacity: 0.65;
+  user-select: none;
+}
+.tab:hover { opacity: 0.9; }
+.tab.active {
+  border-bottom-color: var(--vscode-focusBorder);
+  opacity: 1;
+  font-weight: 500;
+}
+/* ── Toolbar ── */
+#toolbar {
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--vscode-panel-border, #444);
+  font-size: 0.85em;
+}
+#toolbar button {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  border: none;
+  border-radius: 3px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 0.9em;
+  font-family: inherit;
+}
+#toolbar button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+#row-info { margin-left: auto; opacity: 0.6; }
+/* ── Table ── */
+#content { flex: 1; overflow: auto; }
+table { border-collapse: collapse; width: 100%; min-width: max-content; font-size: 0.88em; }
+th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--vscode-editor-background);
+  padding: 5px 12px;
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 2px solid var(--vscode-panel-border, #444);
+  white-space: nowrap;
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+td {
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border, #333);
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+tr:hover td { background: var(--vscode-list-hoverBackground); }
+.null-val { opacity: 0.35; font-style: italic; }
+.key-pri { color: #f0a500; font-weight: 600; }
+.key-mul { color: #5c9cf5; }
+/* ── Loading / Error ── */
+#loading { padding: 40px; text-align: center; opacity: 0.5; }
+#error-msg { padding: 16px; color: #f48771; display: none; }
+/* ── Cell Detail Modal ── */
+#modal-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 100;
+}
+#modal-overlay.open { display: flex; align-items: center; justify-content: center; }
+#modal-box {
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-panel-border, #555);
+  border-radius: 6px;
+  width: min(700px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+#modal-header {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--vscode-panel-border, #444);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+#modal-field-name {
+  font-weight: 600;
+  font-size: 0.9em;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#modal-type-badge {
+  font-size: 0.75em;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  opacity: 0.85;
+}
+#modal-close {
+  background: none;
+  border: none;
+  color: var(--vscode-foreground);
+  font-size: 1.1em;
+  cursor: pointer;
+  opacity: 0.6;
+  padding: 2px 6px;
+  line-height: 1;
+  border-radius: 3px;
+}
+#modal-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground); }
+#modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+#modal-plain {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.88em;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.6;
+}
+#modal-json {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.88em;
+  line-height: 1.7;
+  white-space: pre;
+  overflow-x: auto;
+}
+/* JSON syntax colors */
+.jk   { color: #9cdcfe; }
+.js   { color: #ce9178; }
+.jnum { color: #b5cea8; }
+.jb   { color: #569cd6; }
+.jn   { color: #808080; font-style: italic; }
+/* ── ER View ── */
+.er-empty { padding: 40px; opacity: 0.55; }
+.er-canvas-wrap {
+  height: 100%;
+  overflow: auto;
+  padding: 14px;
+}
+.er-canvas {
+  position: relative;
+  min-width: 980px;
+  min-height: 560px;
+  border: 1px solid var(--vscode-panel-border, #444);
+  border-radius: 8px;
+  background: var(--vscode-editor-background);
+}
+.er-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.er-node {
+  position: absolute;
+  width: 250px;
+  border: 1px solid var(--vscode-panel-border, #444);
+  border-radius: 6px;
+  background: var(--vscode-editor-background);
+  padding: 8px 10px;
+}
+.er-node.center {
+  border-color: var(--vscode-focusBorder);
+}
+.er-node-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+  font-size: 0.9em;
+}
+.er-node-row {
+  font-size: 0.84em;
+  opacity: 0.9;
+  line-height: 1.45;
+  margin: 4px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.er-legend {
+  font-size: 0.82em;
+  opacity: 0.65;
+  margin: 0 0 8px 2px;
+}
+</style>
+</head>
+<body>
+<div id="header">
+  <div id="table-title">数据库 <span>{{DB}}</span> · 表 <span>{{TBL}}</span></div>
+  <div id="tabs">
+    <div class="tab active" data-tab="structure" onclick="switchTab('structure')">结构</div>
+    <div class="tab" data-tab="data" onclick="switchTab('data')">数据</div>
+    <div class="tab" data-tab="er" onclick="switchTab('er')">ER图</div>
+  </div>
+</div>
+<div id="toolbar" style="display:none">
+  <button onclick="reload()">↺ 刷新</button>
+  <label for="page-size" style="opacity:0.75">每页</label>
+  <select id="page-size" onchange="changePageSize(this.value)">
+    <option value="10" selected>10</option>
+    <option value="20">20</option>
+    <option value="50">50</option>
+    <option value="100">100</option>
+  </select>
+  <span id="page-info" style="opacity:0.6"></span>
+  <button id="btn-prev" onclick="prevPage()" disabled>‹ 上一页</button>
+  <button id="btn-next" onclick="nextPage()" disabled>下一页 ›</button>
+  <span id="row-info"></span>
+</div>
+<div id="error-msg"></div>
+<div id="content"><div id="loading">加载中…</div></div>
+
+<!-- Cell Detail Modal -->
+<div id="modal-overlay" onclick="closeModal(event)">
+  <div id="modal-box">
+    <div id="modal-header">
+      <span id="modal-field-name"></span>
+      <span id="modal-type-badge"></span>
+      <button id="modal-close" onclick="closeModal()" title="关闭 (Esc)">✕</button>
+    </div>
+    <div id="modal-body">
+      <div id="modal-plain"></div>
+      <div id="modal-json"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const vscode = acquireVsCodeApi();
+let pageSize = 10;
+let offset = 0;
+let total = 0;
+let currentTab = 'structure';
+let colsCache = [];
+let rowsCache = [];
+let outgoingRefs = [];
+let incomingRefs = [];
+
+function load(off) {
+  offset = off;
+  document.getElementById('content').innerHTML = '<div id="loading">加载中…</div>';
+  vscode.postMessage({ command: 'load', limit: pageSize, offset: off });
+}
+
+window.addEventListener('message', function(e) {
+  const msg = e.data;
+  if (msg.type === 'data') {
+    colsCache = msg.cols;
+    rowsCache = msg.rows;
+    outgoingRefs = msg.outgoingRefs || [];
+    incomingRefs = msg.incomingRefs || [];
+    total = msg.total;
+    updatePager();
+    render();
+  } else if (msg.type === 'error') {
+    const el = document.getElementById('error-msg');
+    el.style.display = 'block';
+    el.textContent = '错误：' + msg.message;
+    document.getElementById('content').innerHTML = '';
+  }
+});
+
+function updatePager() {
+  const page  = Math.floor(offset / pageSize) + 1;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  document.getElementById('page-info').textContent = 'Page ' + page + ' / ' + pages;
+  document.getElementById('row-info').textContent  = '共 ' + total + ' 行，本页 ' + rowsCache.length + ' 行';
+  document.getElementById('btn-prev').disabled = offset <= 0;
+  document.getElementById('btn-next').disabled = offset + pageSize >= total;
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(function(el) {
+    el.classList.toggle('active', el.dataset.tab === tab);
+  });
+  document.getElementById('toolbar').style.display = tab === 'data' ? 'flex' : 'none';
+  render();
+}
+
+function render() {
+  if (currentTab === 'data') renderData();
+  else if (currentTab === 'er') renderER();
+  else renderStructure();
+}
+
+function renderER() {
+  const tableNameEl = document.querySelector('#table-title span:last-of-type');
+  const currentTable = tableNameEl ? tableNameEl.textContent : '当前表';
+  if (!outgoingRefs.length && !incomingRefs.length) {
+    document.getElementById('content').innerHTML = '<div class="er-empty">未检测到外键关系</div>';
+    return;
+  }
+
+  const boxW = 250;
+  const boxH = 110;
+  const leftX = 60;
+  const centerX = 365;
+  const rightX = 670;
+  const centerY = 220;
+  const gapY = 135;
+
+  const nodes = [];
+  const edges = [];
+
+  nodes.push({
+    id: 'center',
+    x: centerX,
+    y: centerY,
+    cls: 'center',
+    title: currentTable,
+    rows: ['当前表']
+  });
+
+  for (let i = 0; i < incomingRefs.length; i++) {
+    const r = incomingRefs[i];
+    const y = 70 + i * gapY;
+    const tName = String(r.TABLE_NAME || '未知表');
+    nodes.push({
+      id: 'in_' + i,
+      x: leftX,
+      y,
+      cls: '',
+      title: tName,
+      rows: [String(r.COLUMN_NAME || '') + ' → ' + currentTable + '.' + String(r.REFERENCED_COLUMN_NAME || '')]
+    });
+    edges.push({ fromX: leftX + boxW, fromY: y + boxH / 2, toX: centerX, toY: centerY + boxH / 2 });
+  }
+
+  for (let i = 0; i < outgoingRefs.length; i++) {
+    const r = outgoingRefs[i];
+    const y = 70 + i * gapY;
+    const tName = String(r.REFERENCED_TABLE_NAME || '未知表');
+    nodes.push({
+      id: 'out_' + i,
+      x: rightX,
+      y,
+      cls: '',
+      title: tName,
+      rows: [currentTable + '.' + String(r.COLUMN_NAME || '') + ' → ' + String(r.REFERENCED_COLUMN_NAME || '')]
+    });
+    edges.push({ fromX: centerX + boxW, fromY: centerY + boxH / 2, toX: rightX, toY: y + boxH / 2 });
+  }
+
+  let html = '<div class="er-canvas-wrap"><div class="er-legend">左侧：引用当前表 · 右侧：当前表引用</div><div class="er-canvas">';
+  html += '<svg class="er-svg" viewBox="0 0 980 560" preserveAspectRatio="none">';
+  html += '<defs><marker id="arrowHead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">';
+  html += '<path d="M0,0 L8,3 L0,6 z" fill="currentColor"/></marker></defs>';
+  for (let i = 0; i < edges.length; i++) {
+    const e = edges[i];
+    const c1x = e.fromX + (e.toX - e.fromX) * 0.4;
+    const c2x = e.fromX + (e.toX - e.fromX) * 0.6;
+    html += '<path d="M' + e.fromX + ' ' + e.fromY + ' C ' + c1x + ' ' + e.fromY + ', ' + c2x + ' ' + e.toY + ', ' + e.toX + ' ' + e.toY + '" '
+      + 'stroke="currentColor" stroke-opacity="0.55" fill="none" stroke-width="1.5" marker-end="url(#arrowHead)"/>';
+  }
+  html += '</svg>';
+
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    html += '<div class="er-node ' + n.cls + '" style="left:' + n.x + 'px;top:' + n.y + 'px">';
+    html += '<div class="er-node-title" title="' + esc(n.title) + '">' + esc(n.title) + '</div>';
+    for (let j = 0; j < n.rows.length; j++) {
+      html += '<div class="er-node-row" title="' + esc(n.rows[j]) + '">' + esc(n.rows[j]) + '</div>';
+    }
+    html += '</div>';
+  }
+
+  html += '</div></div>';
+  document.getElementById('content').innerHTML = html;
+}
+
+function renderData() {
+  if (!rowsCache.length) {
+    document.getElementById('content').innerHTML = '<p style="padding:40px;opacity:0.5">（无数据）</p>';
+    return;
+  }
+  const keys = Object.keys(rowsCache[0]);
+  let html = '<table><thead><tr>' + keys.map(function(k) { return '<th>' + esc(k) + '</th>'; }).join('') + '</tr></thead><tbody>';
+  for (let ri = 0; ri < rowsCache.length; ri++) {
+    const row = rowsCache[ri];
+    html += '<tr>' + keys.map(function(k) {
+      const v = row[k];
+      const attr = ' data-ri="' + ri + '" data-k="' + esc(k) + '" onclick="openCell(this)"';
+      if (v === null || v === undefined) {
+        return '<td class="null-val"' + attr + '>NULL</td>';
+      }
+      const str = (v instanceof Date) ? String(v)
+                : (typeof v === 'object')  ? JSON.stringify(v)
+                : String(v);
+      return '<td title="' + esc(str) + '"' + attr + '>' + esc(str) + '</td>';
+    }).join('') + '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('content').innerHTML = html;
+}
+
+function renderStructure() {
+  if (!colsCache.length) {
+    document.getElementById('content').innerHTML = '<p style="padding:40px;opacity:0.5">（无结构信息）</p>';
+    return;
+  }
+  const headers = ['字段名','类型','可为空','Key','默认值','Extra','注释'];
+  const fields  = ['Field','Type','Null','Key','Default','Extra','Comment'];
+  let html = '<table><thead><tr>' + headers.map(function(h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead><tbody>';
+  for (let i = 0; i < colsCache.length; i++) {
+    const col = colsCache[i];
+    const keyCls = col['Key'] === 'PRI' ? 'key-pri' : col['Key'] === 'MUL' ? 'key-mul' : '';
+    html += '<tr>' + fields.map(function(f) {
+      const v   = col[f];
+      const cls = f === 'Key' ? keyCls : '';
+      if (v === null || v === undefined || v === '') {
+        return '<td class="null-val ' + cls + '">—</td>';
+      }
+      return '<td class="' + cls + '" title="' + esc(String(v)) + '">' + esc(String(v)) + '</td>';
+    }).join('') + '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('content').innerHTML = html;
+}
+
+function reload()   { load(offset); }
+function prevPage() { if (offset > 0) load(Math.max(0, offset - pageSize)); }
+function nextPage() { if (offset + pageSize < total) load(offset + pageSize); }
+function changePageSize(value) {
+  const next = parseInt(value, 10);
+  pageSize = Number.isFinite(next) && next > 0 ? next : 10;
+  load(0);
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── Cell detail modal ── */
+function openCell(td) {
+  const ri  = parseInt(td.dataset.ri, 10);
+  const key = td.dataset.k;
+  const raw = rowsCache[ri][key];
+
+  document.getElementById('modal-field-name').textContent = key;
+  const plainEl = document.getElementById('modal-plain');
+  const jsonEl  = document.getElementById('modal-json');
+  plainEl.style.display = 'none';
+  jsonEl.style.display  = 'none';
+
+  let parsed = null;
+  let isJson = false;
+  if (raw !== null && raw !== undefined) {
+    if (typeof raw === 'object' && !(raw instanceof Date)) {
+      parsed = raw; isJson = true;
+    } else if (typeof raw === 'string') {
+      try { parsed = JSON.parse(raw); isJson = (typeof parsed === 'object' && parsed !== null); } catch(e) {}
+    }
+  }
+
+  const badge = document.getElementById('modal-type-badge');
+  if (raw === null || raw === undefined) {
+    badge.textContent = 'NULL';
+    plainEl.style.display = 'block';
+    plainEl.innerHTML = '<span style="opacity:0.4">NULL</span>';
+  } else if (isJson) {
+    badge.textContent = Array.isArray(parsed) ? 'JSON Array' : 'JSON Object';
+    jsonEl.style.display = 'block';
+    jsonEl.innerHTML = jsonHL(parsed, 0);
+  } else {
+    const str = (raw instanceof Date) ? String(raw) : String(raw);
+    badge.textContent = (raw instanceof Date) ? 'Date' : 'Text';
+    plainEl.style.display = 'block';
+    plainEl.textContent = str;
+  }
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function closeModal(e) {
+  if (e && e instanceof MouseEvent) {
+    if (e.target !== document.getElementById('modal-overlay') &&
+        e.target !== document.getElementById('modal-close')) { return; }
+  }
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') document.getElementById('modal-overlay').classList.remove('open');
+});
+
+function jsonHL(val, depth) {
+  const pad  = '  '.repeat(depth);
+  const pad1 = '  '.repeat(depth + 1);
+  if (val === null)            return '<span class="jn">null</span>';
+  if (typeof val === 'boolean') return '<span class="jb">' + val + '</span>';
+  if (typeof val === 'number')  return '<span class="jnum">' + val + '</span>';
+  if (typeof val === 'string')  return '<span class="js">"' + esc(val) + '"</span>';
+  if (Array.isArray(val)) {
+    if (!val.length) return '[]';
+    return '[\n' + val.map(function(v) { return pad1 + jsonHL(v, depth + 1); }).join(',\n') + '\n' + pad + ']';
+  }
+  if (typeof val === 'object') {
+    const keys = Object.keys(val);
+    if (!keys.length) return '{}';
+    return '{\n' + keys.map(function(k) {
+      return pad1 + '<span class="jk">"' + esc(k) + '"</span>: ' + jsonHL(val[k], depth + 1);
+    }).join(',\n') + '\n' + pad + '}';
+  }
+  return esc(String(val));
+}
+
+// 初始加载
+load(0);
+</script>
+</body>
+</html>

@@ -1,0 +1,124 @@
+{
+  "name": "dbviewer",
+  "displayName": "DB Viewer",
+  "description": "MySQL database viewer for VS Code",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:dbviewer.databasesView"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dbviewer",
+          "title": "DB Viewer",
+          "icon": "resources/database.svg"
+        }
+      ]
+    },
+    "views": {
+      "dbviewer": [
+        {
+          "id": "dbviewer.databasesView",
+          "name": "MySQL Databases",
+          "type": "tree"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "dbviewer.openTable",
+        "title": "Open Table"
+      },
+      {
+        "command": "dbviewer.addConnection",
+        "title": "New Connection",
+        "icon": "$(add)"
+      },
+      {
+        "command": "dbviewer.editConnection",
+        "title": "Edit Connection",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "dbviewer.deleteConnection",
+        "title": "Delete Connection",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "dbviewer.refreshDatabases",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "dbviewer.openQuery",
+        "title": "Query",
+        "icon": "$(search)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "dbviewer.addConnection",
+          "when": "view == dbviewer.databasesView",
+          "group": "navigation"
+        },
+        {
+          "command": "dbviewer.refreshDatabases",
+          "when": "view == dbviewer.databasesView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "dbviewer.editConnection",
+          "when": "view == dbviewer.databasesView && viewItem == connection",
+          "group": "inline"
+        },
+        {
+          "command": "dbviewer.deleteConnection",
+          "when": "view == dbviewer.databasesView && viewItem == connection",
+          "group": "inline"
+        },
+        {
+          "command": "dbviewer.openQuery",
+          "when": "view == dbviewer.databasesView && viewItem == database",
+          "group": "inline"
+        },
+        {
+          "command": "dbviewer.openQuery",
+          "when": "view == dbviewer.databasesView && viewItem == table",
+          "group": "inline"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.19.13",
+    "@types/vscode": "^1.109.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^9.39.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.54.0"
+  },
+  "dependencies": {
+    "mysql2": "^3.18.2"
+  }
+}
