@@ -1,520 +1,301 @@
 import * as vscode from 'vscode';
 import * as mysql from 'mysql2/promise';
+import { DatabaseTreeItem } from './treeItem';
+import { ConnectionConfig } from './types';
+import { loadConfigs, saveConfigs, loadPwd, savePwd, deletePwd } from './configStorage';
+import { DbConnectionManager } from './dbConnectionManager';
+import { SshTunnelManager } from './sshTunnelManager';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
+import { TableViewPanel, ConnectionConfigPanel, SqlQueryPanel } from './webviewPanels';
 
-// ────────────────────────────────────────────────────────────────
-// Types
-// ────────────────────────────────────────────────────────────────
-interface ConnectionConfig {
-	id: string;
-	name: string;
-	host: string;
-	port: number;
-	user: string;
-	database: string;
+// 通知辅助函数
+function notifyInfo(message: string, transientMs = 3000) {
+    try { outputChannel?.appendLine(`[INFO] ${new Date().toLocaleTimeString()} ${message}`); } catch {}
+    // ...可选：状态栏通知...
+}
+function notifyError(message: string) {
+    try { outputChannel?.appendLine(`[ERROR] ${new Date().toLocaleTimeString()} ${message}`); } catch {}
+    vscode.window.showErrorMessage(message);
+}
+function initNotifications(context: vscode.ExtensionContext) {
+    outputChannel = vscode.window.createOutputChannel('DB Viewer');
+    context.subscriptions.push(outputChannel);
 }
 
-type NodeType = 'connection' | 'database' | 'table';
+// 其他辅助变量声明
+let outputChannel: vscode.OutputChannel | undefined;
 
-interface DbNode {
-	type: NodeType;
-	label: string;
-	connId: string;
-	database?: string;
-}
-
-// ────────────────────────────────────────────────────────────────
-// Storage helpers
-// ────────────────────────────────────────────────────────────────
-const CONNS_KEY = 'dbviewer.connections';
-
-function loadConfigs(context: vscode.ExtensionContext): ConnectionConfig[] {
-	return context.globalState.get<ConnectionConfig[]>(CONNS_KEY, []);
-}
-
-async function saveConfigs(context: vscode.ExtensionContext, configs: ConnectionConfig[]): Promise<void> {
-	await context.globalState.update(CONNS_KEY, configs);
-}
-
-function pwdKey(id: string) { return `dbviewer.pwd.${id}`; }
-
-async function loadPwd(context: vscode.ExtensionContext, id: string): Promise<string> {
-	return (await context.secrets.get(pwdKey(id))) ?? '';
-}
-
-async function savePwd(context: vscode.ExtensionContext, id: string, pwd: string): Promise<void> {
-	await context.secrets.store(pwdKey(id), pwd);
-}
-
-async function deletePwd(context: vscode.ExtensionContext, id: string): Promise<void> {
-	await context.secrets.delete(pwdKey(id));
-}
-
-// ────────────────────────────────────────────────────────────────
-// TreeItem
-// ────────────────────────────────────────────────────────────────
-class DatabaseTreeItem extends vscode.TreeItem {
-	constructor(
-		public readonly node: DbNode,
-		label: string,
-		collapsible: vscode.TreeItemCollapsibleState,
-		description?: string
-	) {
-		super(label, collapsible);
-		this.tooltip = label;
-		this.description = description;
-		switch (node.type) {
-			case 'connection':
-				this.iconPath = new vscode.ThemeIcon(
-					description === '已连接' ? 'circle-filled' : 'circle-outline'
-				);
-				this.contextValue = 'connection';
-				break;
-			case 'database':
-				this.iconPath = new vscode.ThemeIcon('database');
-				this.contextValue = 'database';
-				break;
-			case 'table':
-				this.iconPath = new vscode.ThemeIcon('table');
-				this.contextValue = 'table';
-				break;
-		}
-	}
-}
-
-// ────────────────────────────────────────────────────────────────
-// TreeDataProvider – 多连接
-// ────────────────────────────────────────────────────────────────
 class DatabaseTreeDataProvider implements vscode.TreeDataProvider<DatabaseTreeItem> {
-	private _onDidChangeTreeData = new vscode.EventEmitter<DatabaseTreeItem | undefined | void>();
-	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+    private dbManager: DbConnectionManager;
+    private sshManager: SshTunnelManager;
+    private connections = new Map<string, mysql.Connection>();
+    private failedConnections = new Set<string>();
+    private sshClients = new Map<string, any>();
+    private connToSshKey = new Map<string, string>();
+    private intentionallyClosing = new Set<string>();
+    private sshKeyLocks = new Map<string, Promise<void>>();
+    private _onDidChangeTreeData = new vscode.EventEmitter<DatabaseTreeItem | undefined | void>();
+    readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+    
+    constructor(private readonly context: vscode.ExtensionContext) {
+        this.dbManager = new DbConnectionManager();
+        this.sshManager = new SshTunnelManager();
+        initNotifications(context);
+    }
 
-	/** connId → active mysql connection */
-	private connections = new Map<string, mysql.Connection>();
+    async connect(cfg: ConnectionConfig, password: string): Promise<void> {
+        await this.disconnect(cfg.id);
+        if (cfg.sshEnabled) {
+            await this.sshManager.connectViaSsh(cfg, password);
+            const conn = this.sshManager.getConnection(cfg.id);
+            if (conn) { this.connections.set(cfg.id, conn); }
+        } else {
+            await this.dbManager.connectDirect(cfg, password);
+            const conn = this.dbManager.getConnection(cfg.id);
+            if (conn) { this.connections.set(cfg.id, conn); }
+        }
+        // 仅刷新该连接节点，避免影响其它连接的 UI 状态
+        this.refreshConnectionNode(cfg.id);
+    }
 
-	constructor(private readonly context: vscode.ExtensionContext) {}
+    private sleep(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
-	refresh(): void { this._onDidChangeTreeData.fire(); }
+    private async runWithSshKeyLock(key: string, fn: () => Promise<void>) {
+        const prev = this.sshKeyLocks.get(key) || Promise.resolve();
+        const next = prev.then(() => fn()).catch((e) => {
+            try { outputChannel?.appendLine(`[DBG] sshKeyLock fn error for ${key}: ${(e as Error)?.message}`); } catch {}
+        });
+        this.sshKeyLocks.set(key, next);
+        try {
+            await next;
+        } finally {
+            if (this.sshKeyLocks.get(key) === next) { this.sshKeyLocks.delete(key); }
+        }
+    }
 
-	// ── connection management ────────────────────────────────────
 
-	async connect(cfg: ConnectionConfig, password: string): Promise<void> {
-		await this.disconnect(cfg.id);
-		const opts: mysql.ConnectionOptions = {
-			host: cfg.host, port: cfg.port,
-			user: cfg.user, password,
-			multipleStatements: false
-		};
-		if (cfg.database) { opts.database = cfg.database; }
-		const conn = await mysql.createConnection(opts);
-		this.connections.set(cfg.id, conn);
-		this.refresh();
-	}
+    // refresh(): void { this._onDidChangeTreeData.fire(); }
 
-	async disconnect(id: string): Promise<void> {
-		const conn = this.connections.get(id);
-		if (conn) {
-			try { await conn.end(); } catch { /* ignore */ }
-			this.connections.delete(id);
-		}
-	}
+    // ── connection management ────────────────────────────────────
 
-	async disconnectAll(): Promise<void> {
-		for (const id of this.connections.keys()) { await this.disconnect(id); }
-	}
+    async disconnect(id: string): Promise<void> {
+        try {
+            try { outputChannel?.appendLine(`[DBG] disconnect called for ${id}`); } catch {}
+            const conn = this.connections.get(id);
+            if (conn) {
+                try { await conn.end(); } catch { /* ignore */ }
+                this.connections.delete(id);
+            }
+            const sshKey = this.connToSshKey.get(id);
+            if (sshKey) {
+                const holder = this.sshClients.get(sshKey);
+                if (holder) {
+                    // 只移除当前连接的stream和ref，不影响其他连接
+                    const stream = holder.streams.get(id);
+                    if (stream) {
+                        this.intentionallyClosing.add(id);
+                        try { outputChannel?.appendLine(`[DBG] destroying forward stream for ${id}`); } catch {}
+                        try {
+                            if (stream && typeof stream.end === 'function') {
+                                try { stream.end(); } catch {}
+                                setTimeout(() => { try { stream && stream.destroy && stream.destroy(); } catch {} }, 1000);
+                            } else {
+                                try { stream && stream.destroy && stream.destroy(); } catch {}
+                            }
+                        } catch {}
+                        setTimeout(() => { try { this.intentionallyClosing.delete(id); outputChannel?.appendLine(`[DBG] intentionallyClosing cleared for ${id}`); } catch {} }, 3000);
+                    }
+                    holder.streams.delete(id);
+                    holder.refs.delete(id);
+                    try { outputChannel?.appendLine(`[DBG] holder.refs after delete: ${Array.from(holder.refs).join(',')}`); } catch {}
+                    // 只有当没有其他ref时才关闭ssh client
+                    if (!holder.refs.size) {
+                        try { outputChannel?.appendLine(`[DBG] no more refs, ending ssh client for key=${sshKey}`); } catch {}
+                        try { holder.client && holder.client.end && holder.client.end(); } catch {}
+                        this.sshClients.delete(sshKey);
+                    }
+                }
+                this.connToSshKey.delete(id);
+            }
+            // 仅刷新该连接节点，避免影响其它连接的 UI 状态
+            this.refreshConnectionNode(id);
+        } catch (err) {
+            outputChannel?.appendLine(`[ERROR] disconnect failed for ${id}: ${(err as Error).message}`);
+            throw err;
+        }
+    }
 
-	isConnected(id: string): boolean { return this.connections.has(id); }
 
-	getConnection(id: string): mysql.Connection | undefined { return this.connections.get(id); }
+    markFailed(id: string) { this.failedConnections.add(id); this.refreshConnectionNode(id); }
+    clearFailed(id: string) { if (this.failedConnections.has(id)) { this.failedConnections.delete(id); this.refreshConnectionNode(id); } }
+    isFailed(id: string) { return this.failedConnections.has(id); }
 
-	// ── TreeDataProvider impl ────────────────────────────────────
+    async disconnectAll(): Promise<void> {
+        await this.dbManager.disconnectAll();
+        // 断开所有 ssh 连接
+        for (const [id] of this.connections) {
+            await this.sshManager.disconnect(id);
+        }
+        this.connections.clear();
+    }
 
-	getTreeItem(e: DatabaseTreeItem): vscode.TreeItem { return e; }
+    isConnected(id: string): boolean { return this.connections.has(id); }
 
-	async getChildren(element?: DatabaseTreeItem): Promise<DatabaseTreeItem[]> {
-		// 根：列出所有已保存的连接
-		if (!element) {
-			const configs = loadConfigs(this.context);
-			return configs.map(cfg => {
-				const connected = this.isConnected(cfg.id);
-				return new DatabaseTreeItem(
-					{ type: 'connection', label: cfg.name, connId: cfg.id },
-					cfg.name,
-					connected ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
-					connected ? '已连接' : '未连接'
-				);
-			});
-		}
+    getConnection(id: string): mysql.Connection | undefined { return this.connections.get(id); }
 
-		// 连接节点 → 列出数据库
-		if (element.node.type === 'connection') {
-			const conn = this.connections.get(element.node.connId);
-			if (!conn) { return []; }
-			try {
-				const [rows] = await conn.execute<mysql.RowDataPacket[]>('SHOW DATABASES');
-				return rows.map(row => new DatabaseTreeItem(
-					{ type: 'database', label: row['Database'] as string, connId: element.node.connId },
-					row['Database'] as string,
-					vscode.TreeItemCollapsibleState.Collapsed
-				));
-			} catch (err) {
-				vscode.window.showErrorMessage(`获取数据库列表失败: ${(err as Error).message}`);
-				return [];
-			}
-		}
+    // ── TreeDataProvider impl ────────────────────────────────────
 
-		// 数据库节点 → 列出数据表
-		if (element.node.type === 'database') {
-			const conn = this.connections.get(element.node.connId);
-			if (!conn) { return []; }
-			const dbName = element.node.label;
-			try {
-				const [rows] = await conn.execute<mysql.RowDataPacket[]>(
-					`SHOW TABLES FROM \`${dbName}\``
-				);
-				const key = `Tables_in_${dbName}`;
-				return rows.map(row => {
-					const item = new DatabaseTreeItem(
-						{ type: 'table', label: row[key] as string, connId: element.node.connId, database: dbName },
-						row[key] as string,
-						vscode.TreeItemCollapsibleState.None,
-						'table'
-					);
-					item.command = {
-						command: 'dbviewer.openTable',
-						title: 'Open Table',
-						arguments: [item]
-					};
-					return item;
-				});
-			} catch (err) {
-				vscode.window.showErrorMessage(`获取表列表失败: ${(err as Error).message}`);
-				return [];
-			}
-		}
+    getTreeItem(e: DatabaseTreeItem): vscode.TreeItem { return e; }
 
-		return [];
-	}
+    async getChildren(element?: DatabaseTreeItem): Promise<DatabaseTreeItem[]> {
+        try {
+            // 根：列出所有已保存的连接
+            if (!element) {
+                try { outputChannel?.appendLine(`[DBG] getChildren(root) connections=${Array.from(this.connections.keys()).join(',')} failed=${Array.from(this.failedConnections).join(',')} sshClients=${Array.from(this.sshClients.keys()).join(',')}`); } catch {}
+                const configs = loadConfigs(this.context);
+                return configs.map(cfg => {
+                    const connected = this.isConnected(cfg.id);
+                    const failed = this.isFailed(cfg.id);
+                    const item = new DatabaseTreeItem(
+                        { type: 'connection', label: cfg.name, connId: cfg.id },
+                        cfg.name,
+                        connected ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed
+                    );
+                    if (connected) {
+                        item.iconPath = {
+                            light: vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'conn-green.svg')),
+                            dark:  vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'conn-green.svg'))
+                        };
+                    } else if (failed) {
+                        item.iconPath = {
+                            light: vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'conn-red.svg')),
+                            dark:  vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'conn-red.svg'))
+                        };
+                    } else {
+                        item.iconPath = {
+                            light: vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'conn-gray.svg')),
+                            dark:  vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'conn-gray.svg'))
+                        };
+                    }
+                    return item;
+                });
+            }
+
+            // 连接节点 → 列出数据库
+            if (element.node.type === 'connection') {
+                try { outputChannel?.appendLine(`[DBG] getChildren(connection) connections=${Array.from(this.connections.keys()).join(',')} sshClients=${Array.from(this.sshClients.keys()).join(',')}`); } catch {}
+                const conn = this.connections.get(element.node.connId);
+                if (!conn) { return []; }
+                try {
+                    const [rows] = await conn.execute<mysql.RowDataPacket[]>('SHOW DATABASES');
+                    if (!Array.isArray(rows)) {
+                        try { outputChannel?.appendLine(`[WARN] SHOW DATABASES returned non-array for connId=${element.node.connId}: ${JSON.stringify(rows).slice(0,200)}`); } catch {}
+                        return [];
+                    }
+                    return rows.map(row => new DatabaseTreeItem(
+                        { type: 'database', label: row['Database'] as string, connId: element.node.connId },
+                        row['Database'] as string,
+                        vscode.TreeItemCollapsibleState.Collapsed
+                    ));
+                    
+                } catch (err) {
+                    outputChannel?.appendLine(`[ERROR] getChildren(connection) failed for ${element.node.connId}: ${(err as Error).message}`);
+                    return [];
+                }
+            }
+
+            // 数据库节点 → 列出数据表
+            if (element.node.type === 'database') {
+                try { outputChannel?.appendLine(`[DBG] getChildren(database) connections=${Array.from(this.connections.keys()).join(',')} sshClients=${Array.from(this.sshClients.keys()).join(',')} requestedConn=${element.node.connId}`); } catch {}
+                const conn = this.connections.get(element.node.connId);
+                try { outputChannel?.appendLine(`[DBG] getChildren(database) called for connId=${element.node.connId} db=${element.node.label} connExists=${!!conn}`); } catch {}
+                if (!conn) { return []; }
+                const dbName = element.node.label;
+                try {
+                    const [rows] = await conn.execute<mysql.RowDataPacket[]>(
+                        `SHOW TABLES FROM \`${dbName}\``
+                    );
+                    if (!Array.isArray(rows)) {
+                        try { outputChannel?.appendLine(`[WARN] SHOW TABLES returned non-array for ${dbName} on connId=${element.node.connId}: ${JSON.stringify(rows).slice(0,200)}`); } catch {}
+                        return [];
+                    }
+                    try { outputChannel?.appendLine(`[DBG] SHOW TABLES returned ${rows.length} rows for ${dbName} on connId=${element.node.connId}`); } catch {}
+                    const key = `Tables_in_${dbName}`;
+                    return rows.map(row => {
+                        const item = new DatabaseTreeItem(
+                            { type: 'table', label: row[key] as string, connId: element.node.connId, database: dbName },
+                            row[key] as string,
+                            vscode.TreeItemCollapsibleState.None
+                        );
+                        item.command = {
+                            command: 'dbviewer.openTable',
+                            title: 'Open Table',
+                            arguments: [item]
+                        };
+                        return item;
+                    });
+                } catch (err) {
+                    outputChannel?.appendLine(`[ERROR] getChildren(database) failed for ${element.node.connId} db=${dbName}: ${(err as Error).message}`);
+                    return [];
+                }
+            }
+
+            return [];
+        } catch (err) {
+            outputChannel?.appendLine(`[ERROR] getChildren failed: ${(err as Error).message}`);
+            return [];
+        }
+    }
+
+    async refreshConnectionNode(id: string): Promise<void> {
+        // 只刷新指定连接的状态和子节点
+        const configs = loadConfigs(this.context);
+        const cfg = configs.find(c => c.id === id);
+        if (!cfg) {return;}
+        const connected = this.isConnected(id);
+        const failed = this.isFailed(id);
+        try { outputChannel?.appendLine(`[DBG] refreshConnectionNode: id=${id} connected=${connected} failed=${failed} cfgName=${cfg.name}`); } catch {}
+        // 构造新的 TreeItem 并触发刷新
+        const item = new DatabaseTreeItem(
+            { type: 'connection', label: cfg.name, connId: cfg.id },
+            cfg.name,
+            connected ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed
+        );
+        if (connected) {
+            item.iconPath = {
+                light: vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'conn-green.svg')),
+                dark:  vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'conn-green.svg'))
+            };
+        } else if (failed) {
+            item.iconPath = {
+                light: vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'conn-red.svg')),
+                dark:  vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'conn-red.svg'))
+            };
+        } else {
+            item.iconPath = {
+                light: vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'conn-gray.svg')),
+                dark:  vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'conn-gray.svg'))
+            };
+        }
+        this._onDidChangeTreeData.fire(item);
+    }
+
+    
+
+    refresh(node?: DatabaseTreeItem): void {
+        this._onDidChangeTreeData.fire(node);
+    }
 }
-
-// ────────────────────────────────────────────────────────────────
-// WebView 表结构/数据面板
-// ────────────────────────────────────────────────────────────────
-class TableViewPanel {
-	private static panels = new Map<string, TableViewPanel>();
-	private readonly panel: vscode.WebviewPanel;
-	private readonly disposables: vscode.Disposable[] = [];
-
-	static show(
-		extensionPath: string,
-		conn: mysql.Connection,
-		dbName: string,
-		tableName: string
-	): void {
-		const key = `${dbName}.${tableName}`;
-		const existing = TableViewPanel.panels.get(key);
-		if (existing) { existing.panel.reveal(vscode.ViewColumn.One); return; }
-
-		const panel = vscode.window.createWebviewPanel(
-			'dbviewerTable',
-			`${tableName}`,
-			vscode.ViewColumn.One,
-			{ enableScripts: true, retainContextWhenHidden: true }
-		);
-		TableViewPanel.panels.set(key, new TableViewPanel(panel, key, extensionPath, conn, dbName, tableName));
-	}
-
-	private constructor(
-		panel: vscode.WebviewPanel,
-		private readonly key: string,
-		private readonly extensionPath: string,
-		private readonly conn: mysql.Connection,
-		private readonly dbName: string,
-		private readonly tableName: string
-	) {
-		this.panel = panel;
-		this.panel.webview.html = this.buildHtml();
-
-		this.panel.webview.onDidReceiveMessage(async (msg) => {
-			if (msg.command === 'load') {
-				try {
-					const [cols] = await this.conn.execute<mysql.RowDataPacket[]>(
-						`SHOW FULL COLUMNS FROM \`${this.dbName}\`.\`${this.tableName}\``
-					);
-					const [outgoingRefs] = await this.conn.execute<mysql.RowDataPacket[]>(
-						`SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
-						 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
-						 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL`,
-						[this.dbName, this.tableName]
-					);
-					const [incomingRefs] = await this.conn.execute<mysql.RowDataPacket[]>(
-						`SELECT TABLE_NAME, COLUMN_NAME, REFERENCED_COLUMN_NAME
-						 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
-						 WHERE TABLE_SCHEMA = ? AND REFERENCED_TABLE_NAME = ?`,
-						[this.dbName, this.tableName]
-					);
-					const limit = msg.limit ?? 500;
-					const offset = msg.offset ?? 0;
-					const [dataRows] = await this.conn.execute<mysql.RowDataPacket[]>(
-						`SELECT * FROM \`${this.dbName}\`.\`${this.tableName}\` LIMIT ${limit} OFFSET ${offset}`
-					);
-					const [countRows] = await this.conn.execute<mysql.RowDataPacket[]>(
-						`SELECT COUNT(*) AS cnt FROM \`${this.dbName}\`.\`${this.tableName}\``
-					);
-					const total = countRows[0]['cnt'] as number;
-					this.panel.webview.postMessage({
-						type: 'data',
-						cols: cols as object[],
-						rows: dataRows as object[],
-						outgoingRefs: outgoingRefs as object[],
-						incomingRefs: incomingRefs as object[],
-						total, limit, offset
-					});
-				} catch (err) {
-					this.panel.webview.postMessage({ type: 'error', message: (err as Error).message });
-				}
-			}
-		}, undefined, this.disposables);
-
-		this.panel.onDidDispose(() => {
-			TableViewPanel.panels.delete(this.key);
-			this.disposables.forEach(d => d.dispose());
-		}, null, this.disposables);
-	}
-
-	private buildHtml(): string {
-		const htmlPath = path.join(this.extensionPath, 'media', 'tableView.html');
-		return fs.readFileSync(htmlPath, 'utf8')
-			.replace(/\{\{DB\}\}/g, this.dbName)
-			.replace(/\{\{TBL\}\}/g, this.tableName);
-	}
-}
-
-// ────────────────────────────────────────────────────────────────
-// WebView SQL 查询面板
-// ────────────────────────────────────────────────────────────────
-class SqlQueryPanel {
-	private static panels = new Map<string, SqlQueryPanel>();
-	private readonly panel: vscode.WebviewPanel;
-	private readonly disposables: vscode.Disposable[] = [];
-
-	static show(
-		extensionPath: string,
-		conn: mysql.Connection,
-		connId: string,
-		dbName: string,
-		tableName?: string
-	): void {
-		const key = `${connId}:${dbName}:${tableName ?? '__db__'}`;
-		const existing = SqlQueryPanel.panels.get(key);
-		if (existing) { existing.panel.reveal(vscode.ViewColumn.One); return; }
-
-		const title = tableName ? `查询 ${dbName}.${tableName}` : `查询 ${dbName}`;
-		const panel = vscode.window.createWebviewPanel(
-			'dbviewerQuery',
-			title,
-			vscode.ViewColumn.One,
-			{ enableScripts: true, retainContextWhenHidden: true }
-		);
-		SqlQueryPanel.panels.set(key, new SqlQueryPanel(panel, key, extensionPath, conn, dbName, tableName));
-	}
-
-	private constructor(
-		panel: vscode.WebviewPanel,
-		private readonly key: string,
-		private readonly extensionPath: string,
-		private readonly conn: mysql.Connection,
-		private readonly dbName: string,
-		private readonly tableName?: string
-	) {
-		this.panel = panel;
-		this.panel.webview.html = this.buildHtml();
-
-		this.panel.webview.onDidReceiveMessage(async (msg) => {
-			if (msg.command !== 'execute') { return; }
-			const sql = String(msg.sql ?? '').trim();
-			if (!sql) {
-				this.panel.webview.postMessage({ type: 'error', message: '请输入 SQL 语句' });
-				return;
-			}
-
-			try {
-				await this.conn.query(`USE \`${this.dbName}\``);
-				const [rows, fields] = await this.conn.query(sql);
-
-				if (Array.isArray(rows)) {
-					let columns: string[] = [];
-					if (rows.length > 0 && typeof rows[0] === 'object' && rows[0] !== null && !Array.isArray(rows[0])) {
-						columns = Object.keys(rows[0] as object);
-					} else if (Array.isArray(fields)) {
-						columns = fields.map((f: any) => String(f?.name ?? ''));
-					}
-					this.panel.webview.postMessage({
-						type: 'result',
-						mode: 'table',
-						columns,
-						rows: rows as object[]
-					});
-					return;
-				}
-
-				const ok = rows as mysql.ResultSetHeader;
-				this.panel.webview.postMessage({
-					type: 'result',
-					mode: 'ok',
-					message: `执行成功，影响行数 ${ok.affectedRows ?? 0}`
-				});
-			} catch (err) {
-				this.panel.webview.postMessage({ type: 'error', message: (err as Error).message });
-			}
-		}, undefined, this.disposables);
-
-		this.panel.onDidDispose(() => {
-			SqlQueryPanel.panels.delete(this.key);
-			this.disposables.forEach(d => d.dispose());
-		}, null, this.disposables);
-	}
-
-	private buildHtml(): string {
-		const htmlPath = path.join(this.extensionPath, 'media', 'sqlQuery.html');
-		const defaultSql = this.tableName
-			? `SELECT * FROM \`${this.dbName}\`.\`${this.tableName}\` LIMIT 100;`
-			: `-- 请输入 SQL\n-- 当前数据库: ${this.dbName}\nSELECT * FROM information_schema.tables LIMIT 50;`;
-		return fs.readFileSync(htmlPath, 'utf8')
-			.replace(/\{\{TITLE\}\}/g, this.tableName ? `${this.dbName}.${this.tableName}` : this.dbName)
-			.replace(/\{\{DB\}\}/g, this.dbName)
-			.replace(/\{\{DEFAULT_SQL\}\}/g, defaultSql.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
-	}
-}
-
-// ────────────────────────────────────────────────────────────────
-// WebView 配置面板（单一表单）
-// ────────────────────────────────────────────────────────────────
-class ConnectionConfigPanel {
-	/** 每个 connId（或 'new'）对应一个独立面板 */
-	private static panels = new Map<string, ConnectionConfigPanel>();
-	private readonly panel: vscode.WebviewPanel;
-	private readonly disposables: vscode.Disposable[] = [];
-
-	static async show(
-		context: vscode.ExtensionContext,
-		provider: DatabaseTreeDataProvider,
-		editCfg?: ConnectionConfig
-	): Promise<void> {
-		const key = editCfg?.id ?? 'new';
-		const existing = ConnectionConfigPanel.panels.get(key);
-		if (existing) { existing.panel.reveal(vscode.ViewColumn.One); return; }
-
-		const title = editCfg ? `编辑连接 — ${editCfg.name}` : '新建连接';
-		const panel = vscode.window.createWebviewPanel(
-			'dbviewerConfig', title,
-			vscode.ViewColumn.One,
-			{ enableScripts: true, retainContextWhenHidden: true }
-		);
-		ConnectionConfigPanel.panels.set(key, new ConnectionConfigPanel(panel, context, provider, key, editCfg));
-	}
-
-	private constructor(
-		panel: vscode.WebviewPanel,
-		private readonly context: vscode.ExtensionContext,
-		private readonly provider: DatabaseTreeDataProvider,
-		private readonly key: string,
-		private readonly editCfg?: ConnectionConfig
-	) {
-		this.panel = panel;
-		this.panel.webview.html = this.buildHtml();
-
-		this.panel.webview.onDidReceiveMessage(async (msg) => {
-			switch (msg.command) {
-				case 'ready': {
-					const cfg = this.editCfg;
-					const pwd = cfg ? await loadPwd(this.context, cfg.id) : '';
-					this.panel.webview.postMessage({ type: 'init', cfg: cfg ?? null, pwd });
-					break;
-				}
-				case 'test':
-					await this.handleTestOrSave(msg, false);
-					break;
-				case 'save':
-					await this.handleTestOrSave(msg, true);
-					break;
-				case 'delete': {
-					const cfgs = loadConfigs(this.context).filter(c => c.id !== msg.id);
-					await saveConfigs(this.context, cfgs);
-					await deletePwd(this.context, msg.id);
-					await this.provider.disconnect(msg.id);
-					this.provider.refresh();
-					this.panel.dispose();
-					break;
-				}
-			}
-		}, undefined, this.disposables);
-
-		this.panel.onDidDispose(() => {
-			ConnectionConfigPanel.panels.delete(this.key);
-			this.disposables.forEach(d => d.dispose());
-		}, null, this.disposables);
-	}
-
-	private async handleTestOrSave(
-		msg: { id?: string; name: string; host: string; port: string; user: string; database: string; password: string },
-		doSave: boolean
-	) {
-		const portNum = parseInt(msg.port, 10) || 3306;
-		const dbLabel = msg.database ? `/${msg.database}` : '';
-		this.postStatus('connecting', `正在连接 ${msg.user}@${msg.host}:${portNum}${dbLabel} ...`);
-
-		try {
-			const opts: mysql.ConnectionOptions = { host: msg.host, port: portNum, user: msg.user, password: msg.password };
-			if (msg.database) { opts.database = msg.database; }
-			const conn = await mysql.createConnection(opts);
-			await conn.end();
-			this.postStatus('ok', `连接成功！${msg.user}@${msg.host}:${portNum}${dbLabel}`);
-		} catch (err) {
-			this.postStatus('error', `连接失败：${(err as Error).message}`);
-			return;
-		}
-
-		if (doSave) {
-			const configs = loadConfigs(this.context);
-			const id = msg.id || `conn_${Date.now()}`;
-			const cfg: ConnectionConfig = {
-				id, name: msg.name || `${msg.user}@${msg.host}`,
-				host: msg.host, port: portNum,
-				user: msg.user, database: msg.database
-			};
-			const idx = configs.findIndex(c => c.id === id);
-			if (idx >= 0) { configs[idx] = cfg; } else { configs.push(cfg); }
-			await saveConfigs(this.context, configs);
-			await savePwd(this.context, id, msg.password);
-			await tryConnect(this.provider, cfg, msg.password);
-			this.panel.dispose();
-		}
-	}
-
-	private postStatus(type: 'connecting' | 'ok' | 'error', message: string) {
-		this.panel.webview.postMessage({ type, message });
-	}
-
-	private buildHtml(): string {
-		const isEdit = !!this.editCfg;
-		const htmlPath = path.join(this.context.extensionPath, 'media', 'connectionConfig.html');
-		const deleteBtn = isEdit
-			? '<button class="btn-danger" onclick="del()">删除连接</button>'
-			: '';
-		return fs.readFileSync(htmlPath, 'utf8')
-			.replace(/\{\{TITLE\}\}/g,      isEdit ? '编辑连接' : '新建连接')
-			.replace(/\{\{HEADING\}\}/g,    isEdit ? '✏️ 编辑连接' : '➕ 新建连接')
-			.replace(/\{\{DELETE_BTN\}\}/g, deleteBtn);
-	}
-}
-
 // ────────────────────────────────────────────────────────────────
 // activate
 // ────────────────────────────────────────────────────────────────
 export function activate(context: vscode.ExtensionContext) {
 	console.log('dbviewer extension activated');
+
+	// init reduced-notification helpers
+	initNotifications(context);
 
 	const provider = new DatabaseTreeDataProvider(context);
 	const treeView = vscode.window.createTreeView('dbviewer.databasesView', {
@@ -551,14 +332,49 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	// ── 新建连接 ──────────────────────────────────────────────
-	const addConnCmd = vscode.commands.registerCommand('dbviewer.addConnection', () => {
-		ConnectionConfigPanel.show(context, provider);
-	});
+    const addConnCmd = vscode.commands.registerCommand('dbviewer.addConnection', async () => {
+        await ConnectionConfigPanel.show(context, provider);
+    });
 
 	// ── 编辑连接（树节点右键） ─────────────────────────────────
-	const editConnCmd = vscode.commands.registerCommand('dbviewer.editConnection', async (item: DatabaseTreeItem) => {
-		const cfg = loadConfigs(context).find(c => c.id === item.node.connId);
-		if (cfg) { ConnectionConfigPanel.show(context, provider, cfg); }
+    const editConnCmd = vscode.commands.registerCommand('dbviewer.editConnection', async (item?: DatabaseTreeItem) => {
+        let cfg: ConnectionConfig | undefined;
+        if (!item || !item.node) {
+            // invoked without tree item — prompt user to pick a saved connection
+            const configs = loadConfigs(context);
+            if (!configs || configs.length === 0) { vscode.window.showWarningMessage('没有可编辑的连接配置'); return; }
+            const pick = await vscode.window.showQuickPick(configs.map(c => ({ label: c.name, id: c.id } as any)), { placeHolder: '选择要编辑的连接' });
+            if (!pick) { return; }
+            cfg = configs.find(c => c.id === pick.id);
+        } else {
+            cfg = loadConfigs(context).find(c => c.id === item.node.connId);
+        }
+        if (cfg) { await ConnectionConfigPanel.show(context, provider, cfg); }
+    });
+
+	// ── 刷新单个连接（树节点右键） ───────────────────────────────
+	const refreshConnCmd = vscode.commands.registerCommand('dbviewer.refreshConnection', async (item?: DatabaseTreeItem) => {
+		if (!item || !item.node) {
+			vscode.window.showWarningMessage('未指定连接节点，无法刷新');
+			return;
+		}
+		const id = item.node.connId;
+		const cfg = loadConfigs(context).find(c => c.id === id);
+		if (!cfg) { vscode.window.showWarningMessage('未找到连接配置'); return; }
+		const pwd = await loadPwd(context, id);
+		try {
+			try { outputChannel?.appendLine(`[DBG] refreshConnCmd: disconnecting ${id}`); } catch {}
+			await provider.disconnect(id);
+			try { outputChannel?.appendLine(`[DBG] refreshConnCmd: disconnected ${id}, connections=${Array.from(provider['connections'].keys()).join(',')}`); } catch {}
+			try { outputChannel?.appendLine(`[DBG] refreshConnCmd: starting tryConnect for ${id}`); } catch {}
+			await tryConnect(provider, cfg, pwd);
+			try { outputChannel?.appendLine(`[DBG] refreshConnCmd: tryConnect completed for ${id}`); } catch {}
+			await provider.refreshConnectionNode(id);
+			notifyInfo(`已刷新连接：${cfg.name}`);
+		} catch (err) {
+			notifyError(`刷新连接失败：${(err as Error).message}`);
+			try { outputChannel?.appendLine(`[DBG] refreshConnCmd: error for ${id}: ${(err as Error).message}`); } catch {}
+		}
 	});
 
 	// ── 删除连接（树节点右键） ─────────────────────────────────
@@ -579,11 +395,69 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	// ── 刷新 ──────────────────────────────────────────────────
-	const refreshCmd = vscode.commands.registerCommand('dbviewer.refreshDatabases', () => {
-		provider.refresh();
+    // 顶部刷新命令已移除（避免 UI 互相影响），不再注册 'dbviewer.refreshDatabases'
+
+	// ── 导出/导入连接到 ~/.dbviewer/config.json ───────────────────
+	const exportCmd = vscode.commands.registerCommand('dbviewer.exportConnections', async () => {
+		const configs = loadConfigs(context);
+		try {
+			// 包含明文密码：从 Secret storage 读取并加入导出对象
+			const exportItems: any[] = [];
+			for (const cfg of configs) {
+				const pwd = await loadPwd(context, cfg.id);
+				exportItems.push({ ...cfg, password: pwd });
+			}
+
+			const uri = await vscode.window.showSaveDialog({
+				defaultUri: vscode.Uri.file(os.homedir()),
+				filters: { 'JSON': ['json'] },
+				saveLabel: '导出'
+			});
+			if (!uri) { return; }
+					   fs.writeFileSync(uri.fsPath, JSON.stringify(exportItems, null, 2), { encoding: 'utf8' });
+			vscode.window.showInformationMessage(`已导出 ${exportItems.length} 个连接到 ${uri.fsPath}（包含明文密码）`);
+		} catch (err) {
+			vscode.window.showErrorMessage(`导出失败：${(err as Error).message}`);
+		}
 	});
 
-	context.subscriptions.push(openTableCmd, openQueryCmd, addConnCmd, editConnCmd, deleteConnCmd, refreshCmd);
+	const importCmd = vscode.commands.registerCommand('dbviewer.importConnections', async () => {
+		try {
+			const uris = await vscode.window.showOpenDialog({
+				defaultUri: vscode.Uri.file(os.homedir()),
+				canSelectMany: false,
+				filters: { 'JSON': ['json'] },
+				openLabel: '导入'
+			});
+			if (!uris || uris.length === 0) { return; }
+			const selected = uris[0].fsPath;
+			if (!fs.existsSync(selected)) { vscode.window.showWarningMessage(`${selected} 不存在`); return; }
+			const raw = fs.readFileSync(selected, 'utf8');
+			const parsed = JSON.parse(raw) as any[];
+			if (!Array.isArray(parsed)) { throw new Error('配置文件格式不正确'); }
+			// 如果包含 password 字段则保存到 Secret storage，并从 configs 中移除密码
+			const configsToSave: ConnectionConfig[] = [];
+			for (const item of parsed) {
+				const copy: any = { ...item };
+				const pwd = copy.password as string | undefined;
+				if (pwd) { await savePwd(context, copy.id, pwd); }
+				delete copy.password;
+				configsToSave.push(copy as ConnectionConfig);
+			}
+			await saveConfigs(context, configsToSave);
+			// try reconnecting where password secret exists
+			for (const cfg of configsToSave) {
+				const pwd = await loadPwd(context, cfg.id);
+				if (pwd) { await tryConnect(provider, cfg, pwd, true); }
+			}
+			provider.refresh();
+			vscode.window.showInformationMessage(`已从 ${selected} 导入 ${configsToSave.length} 个连接（若文件含密码已保存到 Secret）`);
+		} catch (err) {
+			vscode.window.showErrorMessage(`导入失败：${(err as Error).message}`);
+		}
+	});
+
+    context.subscriptions.push(openTableCmd, openQueryCmd, addConnCmd, editConnCmd, refreshConnCmd, deleteConnCmd, exportCmd, importCmd);
 
 	// 启动时自动重连所有已保存的连接
 	(async () => {
@@ -604,24 +478,48 @@ async function tryConnect(
 	password: string,
 	silent = false
 ): Promise<void> {
-	try {
-		await vscode.window.withProgress(
-			{
-				location: vscode.ProgressLocation.Notification,
-				title: `正在连接 MySQL ${cfg.user}@${cfg.host}:${cfg.port} ...`,
-				cancellable: false
-			},
-			async () => { await provider.connect(cfg, password); }
-		);
-		if (!silent) {
-			vscode.window.showInformationMessage(`MySQL 连接成功：${cfg.name}`);
-		}
-	} catch (err) {
-		if (!silent) {
-			vscode.window.showErrorMessage(`MySQL 连接失败：${(err as Error).message}`);
-		}
-		provider.refresh();
+	// prevent concurrent connect attempts for the same connection id
+	if (!(globalThis as any).__dbviewer_inflight_connects) { (globalThis as any).__dbviewer_inflight_connects = new Set<string>(); }
+	const inflight: Set<string> = (globalThis as any).__dbviewer_inflight_connects;
+	if (inflight.has(cfg.id)) {
+		try { outputChannel?.appendLine(`[DBG] tryConnect skipped for ${cfg.id} because another connect is in-flight`); } catch {}
+		return;
 	}
+	inflight.add(cfg.id);
+    try {
+        try { outputChannel?.appendLine(`[DBG] tryConnect start for ${cfg.id} ${cfg.user}@${cfg.host}:${cfg.port}`); } catch {}
+        if (!silent) {
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: `正在连接 MySQL ${cfg.user}@${cfg.host}:${cfg.port} ...`,
+                    cancellable: false
+                },
+                async () => { await provider.connect(cfg, password); }
+            );
+        } else {
+            // 静默模式：直接连接，不弹出全局进度通知
+            await provider.connect(cfg, password);
+        }
+        try { outputChannel?.appendLine(`[DBG] tryConnect success for ${cfg.id}`); } catch {}
+        if (!silent) {
+            notifyInfo(`MySQL 连接成功：${cfg.name}`);
+        }
+        // clear failed marker on success
+        try { provider.clearFailed(cfg.id); } catch { /* ignore */ }
+    } catch (err) {
+        if (!silent) {
+            notifyError(`MySQL 连接失败：${(err as Error).message}`);
+        }
+        try { outputChannel?.appendLine(`[DBG] tryConnect failed for ${cfg.id}: ${(err as Error).message}`); } catch {}
+        // mark as failed so tree shows red icon
+        try { provider.markFailed(cfg.id); } catch { /* ignore */ }
+        // 仅刷新出错的连接节点
+        try { provider.refreshConnectionNode(cfg.id); } catch { /* ignore */ }
+    }
+    finally {
+        try { inflight.delete(cfg.id); } catch {}
+    }
 }
 
 // This method is called when your extension is deactivated

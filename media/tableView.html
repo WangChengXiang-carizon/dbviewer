@@ -274,6 +274,8 @@ tr:hover td { background: var(--vscode-list-hoverBackground); }
 const vscode = acquireVsCodeApi();
 let pageSize = 10;
 let offset = 0;
+let sortField = null;
+let sortDir = 'ASC';
 let total = 0;
 let currentTab = 'structure';
 let colsCache = [];
@@ -284,7 +286,7 @@ let incomingRefs = [];
 function load(off) {
   offset = off;
   document.getElementById('content').innerHTML = '<div id="loading">加载中…</div>';
-  vscode.postMessage({ command: 'load', limit: pageSize, offset: off });
+  vscode.postMessage({ command: 'load', limit: pageSize, offset: off, sortField: sortField, sortDir: sortDir });
 }
 
 window.addEventListener('message', function(e) {
@@ -420,7 +422,11 @@ function renderData() {
     return;
   }
   const keys = Object.keys(rowsCache[0]);
-  let html = '<table><thead><tr>' + keys.map(function(k) { return '<th>' + esc(k) + '</th>'; }).join('') + '</tr></thead><tbody>';
+  let html = '<table><thead><tr>' + keys.map(function(k) {
+    const isActive = sortField === k;
+    const arrow = isActive ? (sortDir === 'ASC' ? ' ▲' : ' ▼') : '';
+    return '<th data-col="' + esc(k) + '" onclick="toggleSort(this)">' + esc(k) + arrow + '</th>';
+  }).join('') + '</tr></thead><tbody>';
   for (let ri = 0; ri < rowsCache.length; ri++) {
     const row = rowsCache[ri];
     html += '<tr>' + keys.map(function(k) {
@@ -437,6 +443,18 @@ function renderData() {
   }
   html += '</tbody></table>';
   document.getElementById('content').innerHTML = html;
+}
+
+function toggleSort(th) {
+  const col = th.dataset.col;
+  if (!col) return;
+  if (sortField === col) {
+    sortDir = sortDir === 'ASC' ? 'DESC' : 'ASC';
+  } else {
+    sortField = col;
+    sortDir = 'ASC';
+  }
+  load(0);
 }
 
 function renderStructure() {

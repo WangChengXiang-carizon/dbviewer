@@ -33,7 +33,7 @@ generate:
 	@echo "==== VSCode插件生成完成 ===="
 
 build:
-	npm install && npm run compile
+	npm install && npm run lint && npm run compile
 
 package:
 	npm run package

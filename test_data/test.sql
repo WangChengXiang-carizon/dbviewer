@@ -1,0 +1,7 @@
+-- SELECT id,dataset_id,anno_task_id FROM `autolabel_case_production`.`map_checkanno_tasks` where aidi_model_dag_name='gttools_test_jira_facture_pro_dataset_8d3e0419_map_anno_12063269_12063269_633ba196';
+
+-- update `autolabel_case_production`.`map_checkanno_tasks` set anno_task_id=769713 where aidi_model_dag_name='gttools_test_jira_facture_pro_dataset_8d3e0419_map_anno_12063269_12063269_633ba196';
+
+-- SELECT id,dataset_id,anno_task_id FROM `autolabel_case_production`.`map_checkanno_tasks` where aidi_model_dag_name='gttools_test_jira_facture_pro_dataset_8d3e0419_map_anno_12063270_12063270_ab26f4ae';
+
+-- update `autolabel_case_production`.`map_checkanno_tasks` set anno_task_id=769726 where aidi_model_dag_name='gttools_test_jira_facture_pro_dataset_8d3e0419_map_anno_12063270_12063270_ab26f4ae';

@@ -2,7 +2,7 @@
   "name": "dbviewer",
   "displayName": "MySQL Simple Viewer",
   "description": "MySQL database viewer for VS Code",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "cxwang",
   "engines": {
     "vscode": "^1.80.0"
@@ -39,6 +39,16 @@
         "title": "Open Table"
       },
       {
+        "command": "dbviewer.exportConnections",
+        "title": "导出连接",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "dbviewer.importConnections",
+        "title": "导入连接",
+        "icon": "$(cloud-upload)"
+      },
+      {
         "command": "dbviewer.addConnection",
         "title": "New Connection",
         "icon": "$(add)"
@@ -54,10 +64,11 @@
         "icon": "$(trash)"
       },
       {
-        "command": "dbviewer.refreshDatabases",
-        "title": "Refresh",
+        "command": "dbviewer.refreshConnection",
+        "title": "刷新连接",
         "icon": "$(refresh)"
       },
+      
       {
         "command": "dbviewer.openQuery",
         "title": "Query",
@@ -72,10 +83,16 @@
           "group": "navigation"
         },
         {
-          "command": "dbviewer.refreshDatabases",
+          "command": "dbviewer.exportConnections",
+          "when": "view == dbviewer.databasesView",
+          "group": "navigation"
+        },
+        {
+          "command": "dbviewer.importConnections",
           "when": "view == dbviewer.databasesView",
           "group": "navigation"
         }
+        
       ],
       "view/item/context": [
         {
@@ -98,16 +115,22 @@
           "when": "view == dbviewer.databasesView && viewItem == table",
           "group": "inline"
         }
+      ,
+        {
+          "command": "dbviewer.refreshConnection",
+          "when": "view == dbviewer.databasesView && viewItem == connection",
+          "group": "inline"
+        }
       ]
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run lint && npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint",
+    "pretest": "npm run lint && npm run compile",
     "lint": "eslint src",
-    "test": "vscode-test",
+    "test": "npm run lint && npm run compile && vscode-test",
     "package": "vsce package --allow-missing-repository --allow-star-activation"
   },
   "devDependencies": {
@@ -121,6 +144,7 @@
     "typescript-eslint": "^8.54.0"
   },
   "dependencies": {
-    "mysql2": "^3.18.2"
+    "mysql2": "^3.18.2",
+    "ssh2": "^1.13.0"
   }
 }

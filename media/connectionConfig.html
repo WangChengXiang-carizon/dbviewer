@@ -78,11 +78,48 @@ button {
 </div>
 <div class="field">
   <label for="password">密码</label>
-  <input id="password" type="password" placeholder="输入密码"/>
+  <div style="display:flex;align-items:center;gap:6px;">
+    <input id="password" type="password" placeholder="输入密码" style="flex:1;"/>
+    <button id="toggle-pwd" type="button" title="显示/隐藏密码" style="background:transparent;border:none;cursor:pointer;font-size:1.05em;">👁️</button>
+  </div>
 </div>
 <div class="field">
   <label for="database">默认数据库 <span style="opacity:0.5">(可选)</span></label>
   <input id="database" type="text" placeholder="留空则显示所有数据库"/>
+</div>
+<div class="field">
+  <label><input id="ssh-enabled" type="checkbox"/> 启用 SSH 隧道</label>
+</div>
+<div id="ssh-section" style="display:none; padding:8px 10px; border:1px dashed var(--vscode-input-border); border-radius:4px; margin-bottom:12px;">
+  <div class="field">
+    <label for="ssh-host">SSH 主机</label>
+    <input id="ssh-host" type="text" placeholder="ssh.example.com"/>
+  </div>
+  <div class="row">
+    <div class="field">
+      <label for="ssh-port">SSH 端口</label>
+      <input id="ssh-port" type="number" placeholder="22"/>
+    </div>
+    <div class="field">
+      <label for="ssh-user">SSH 用户</label>
+      <input id="ssh-user" type="text" placeholder="sshuser"/>
+    </div>
+  </div>
+  <div class="field">
+    <label for="ssh-password">SSH 密码 <span style="opacity:0.6">(或留空使用私钥)</span></label>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <input id="ssh-password" type="password" placeholder="SSH password" style="flex:1;"/>
+      <button id="toggle-ssh-pwd" type="button" title="显示/隐藏 SSH 密码" style="background:transparent;border:none;cursor:pointer;font-size:1.05em;">👁️</button>
+    </div>
+  </div>
+  <div class="field">
+    <label for="ssh-privateKey">私钥路径 <span style="opacity:0.6">(例如 ~/.ssh/id_rsa)</span></label>
+    <input id="ssh-privateKey" type="text" placeholder="/Users/you/.ssh/id_rsa"/>
+  </div>
+  <div class="field">
+    <label for="ssh-passphrase">私钥口令 <span style="opacity:0.6">(如果适用)</span></label>
+    <input id="ssh-passphrase" type="password" placeholder="passphrase"/>
+  </div>
 </div>
 <div class="actions">
   <button class="btn-primary" onclick="save()">保存并连接</button>
@@ -107,6 +144,14 @@ window.addEventListener('message', function(e) {
       document.getElementById('user').value      = cfg.user;
       document.getElementById('database').value  = cfg.database || '';
       document.getElementById('password').value  = msg.pwd || '';
+          document.getElementById('ssh-enabled').checked = cfg?.sshEnabled ? true : false;
+          document.getElementById('ssh-host').value = cfg?.sshHost || '';
+          document.getElementById('ssh-port').value = cfg?.sshPort || '';
+          document.getElementById('ssh-user').value = cfg?.sshUser || '';
+          document.getElementById('ssh-password').value = cfg?.sshPassword || '';
+          document.getElementById('ssh-privateKey').value = cfg?.sshPrivateKey || '';
+          document.getElementById('ssh-passphrase').value = cfg?.sshPassphrase || '';
+          toggleSshSection();
     } else {
       document.getElementById('host').value = 'localhost';
       document.getElementById('port').value = '3306';
@@ -128,7 +173,14 @@ function collect() {
     port:     document.getElementById('port').value.trim(),
     user:     document.getElementById('user').value.trim(),
     database: document.getElementById('database').value.trim(),
-    password: document.getElementById('password').value
+    password: document.getElementById('password').value,
+    sshEnabled: document.getElementById('ssh-enabled').checked,
+    sshHost: document.getElementById('ssh-host').value.trim(),
+    sshPort: document.getElementById('ssh-port').value.trim(),
+    sshUser: document.getElementById('ssh-user').value.trim(),
+    sshPassword: document.getElementById('ssh-password').value,
+    sshPrivateKey: document.getElementById('ssh-privateKey').value.trim(),
+    sshPassphrase: document.getElementById('ssh-passphrase').value
   };
 }
 function save() { vscode.postMessage({ command: 'save', ...collect() }); }
@@ -138,6 +190,28 @@ function del()  { vscode.postMessage({ command: 'delete', id: document.getElemen
 document.addEventListener('keydown', function(ev) {
   if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) save();
 });
+
+document.getElementById('ssh-enabled').addEventListener('change', toggleSshSection);
+function toggleSshSection() {
+  const en = document.getElementById('ssh-enabled').checked;
+  document.getElementById('ssh-section').style.display = en ? 'block' : 'none';
+}
+
+// Toggle password visibility for MySQL and SSH password fields
+document.getElementById('toggle-pwd').addEventListener('click', () => togglePassword('password', 'toggle-pwd'));
+document.getElementById('toggle-ssh-pwd').addEventListener('click', () => togglePassword('ssh-password', 'toggle-ssh-pwd'));
+function togglePassword(inputId, btnId) {
+  const inp = document.getElementById(inputId);
+  const btn = document.getElementById(btnId);
+  if (!inp || !btn) return;
+  if (inp.type === 'password') {
+    inp.type = 'text';
+    btn.textContent = '🙈';
+  } else {
+    inp.type = 'password';
+    btn.textContent = '👁️';
+  }
+}
 </script>
 </body>
 </html>
